@@ -21,12 +21,9 @@
  * Example:
  * $2y$14$i5btSOiulHhaPHPbgNUGdObga/GC.AVG/y5HHY1ra7L0C9dpCaw8u
  *
- * For now, only the Bcrypt hash algorithm is supported, but it is
+ * For now, only the Bcrypt hash scheme is supported, but it is
  * expandable to support hashes from other algorithms without
- * affecting existing BMCF hashes.
- *
- * There is a dependency on the Base2n class in
- * {@link https://github.com/ademarre/binary-to-text-php}.
+ * affecting existing stored BMCF hashes.
  *
  * @see https://github.com/ademarre/binary-mcf BMCF Specification
  * @see http://pythonhosted.org/passlib/modular_crypt_format.html
@@ -37,9 +34,22 @@
  */
 class McfHash
 {
-    // 3-bit algorithm identifiers (in the three most significant bits)
-    // Our nomenclature here is algoId => scheme
-    protected $_algorithms = array(
+    /**
+     * Bcrypt base-64 encoding alphabet
+     */
+    const CHARS_BCRYPT = './ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+    /**
+     * RFC 4648 base64 encoding alphabet
+     */
+    const CHARS_BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+    /**
+     * 3-bit scheme identifiers (in the three most significant bits)
+     *
+     * @var array
+     */
+    protected $schemes = array(
     //  0x00  => 'blank', // Reserved; perhaps for the implicit DES schemes
         0x20  => '2',
         0x40  => '2a',
@@ -63,13 +73,13 @@ class McfHash
     public function decode($hash)
     {
         if (!is_string($hash)) throw new InvalidArgumentException('$hash must be a string');
-        if ($hash[0] != '$') throw new RangeException('Unsupported hash algorithm'); // Possibly a DES hash
+        if ($hash[0] != '$') throw new RangeException('Unsupported hash scheme'); // Possibly a DES hash
 
         $parts = explode('$', $hash, 4);
-        $algoIds = array_flip($this->_algorithms);
+        $schemes = array_flip($this->schemes);
 
-        if (!isset($parts[2]) || !isset($algoIds[$parts[1]])) {
-            throw new RangeException('Unsupported hash algorithm');
+        if (!isset($parts[2]) || !isset($schemes[$parts[1]])) {
+            throw new RangeException('Unsupported hash scheme');
         }
 
         // At this point we know we're working with a Bcrypt hash
@@ -85,16 +95,14 @@ class McfHash
             throw new UnexpectedValueException('Invalid Bcrypt cost');
         }
 
-        $headerOctet = $algoIds[$scheme] | (intval($cost) & 0x1F);
+        $headerOctet = $schemes[$scheme] | (intval($cost) & 0x1F);
         $binaryHash = pack('C', $headerOctet);
 
-        $b64 = $this->_getbinaryToTextEncoder($scheme);
-
         // Decode the salt
-        $binaryHash .= $b64->decode(substr($parts[3], 0, 22));
+        $binaryHash .= $this->bcrypt64Decode(substr($parts[3], 0, 22));
 
         // Decode the hash digest
-        $binaryHash .= $b64->decode(substr($parts[3], 22, 31));
+        $binaryHash .= $this->bcrypt64Decode(substr($parts[3], 22, 31));
 
         return $binaryHash;
     }
@@ -118,12 +126,12 @@ class McfHash
         $octets = unpack('C', $binaryHash[0]);
         $headerOctet = array_shift($octets);
 
-        // Get the algorithm identifier
-        $algoId = $headerOctet & 0xE0;
-        if (!isset($this->_algorithms[$algoId])) {
-            throw new RangeException('Unsupported hash algorithm');
+        // Get the scheme identifier
+        $schemeId = $headerOctet & 0xE0;
+        if (!isset($this->schemes[$schemeId])) {
+            throw new RangeException('Unsupported hash scheme');
         }
-        $scheme = $this->_algorithms[$algoId];
+        $scheme = $this->schemes[$schemeId];
 
         // At this point we know we're working with a Bcrypt hash
 
@@ -131,26 +139,35 @@ class McfHash
             throw new UnexpectedValueException('Invalid Bcrypt hash');
         }
 
-        $b64 = $this->_getbinaryToTextEncoder($scheme);
+        $cost = sprintf('%02u', $headerOctet - $schemeId);
+        $salt = $this->bcrypt64Encode(substr($binaryHash, 1, 16));
+        $digest = $this->bcrypt64Encode(substr($binaryHash, 17, 23));
 
-        $cost = sprintf('%02u', $headerOctet - $algoId);
-        $salt = $b64->encode(substr($binaryHash, 1, 16));
-        $hashDigest = $b64->encode(substr($binaryHash, 17, 23));
-
-        return '$' . $scheme . '$' . $cost . '$' . $salt . $hashDigest;
+        return '$' . $scheme . '$' . $cost . '$' . $salt . $digest;
     }
 
-    protected function _getbinaryToTextEncoder($scheme)
+    /**
+     * Encode Bcrypt base-64
+     *
+     * @param   string  $data   The data to encode
+     * @return  string          Encoded data
+     */
+    protected function bcrypt64Encode($data)
     {
-        switch ($scheme) {
-            case '2':
-            case '2a':
-            case '2x':
-            case '2y':
-                // Bcrypt
-                return new Base2n(6, './ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', TRUE, TRUE);
-            default:
-                throw new InvalidArgumentException('No binary-to-text encoder for the requested scheme');
-        }
+        $replace = array_combine(str_split(self::CHARS_BASE64), str_split(self::CHARS_BCRYPT));
+        $replace['='] = '';
+        return strtr(base64_encode($data), $replace);
+    }
+
+    /**
+     * Decode Bcrypt base-64
+     *
+     * @param   string  $data   The data to decode
+     * @return  string          Decoded data
+     */
+    protected function bcrypt64Decode($data)
+    {
+        $translated = strtr($data, array_combine(str_split(self::CHARS_BCRYPT), str_split(self::CHARS_BASE64)));
+        return base64_decode($translated);
     }
 }
