@@ -154,9 +154,7 @@ class McfHash
      */
     protected function bcrypt64Encode($data)
     {
-        $replace = array_combine(str_split(self::CHARS_BASE64), str_split(self::CHARS_BCRYPT));
-        $replace['='] = '';
-        return strtr(base64_encode($data), $replace);
+        return strtr(rtrim(base64_encode($data), '='), self::CHARS_BASE64, self::CHARS_BCRYPT);
     }
 
     /**
@@ -167,7 +165,6 @@ class McfHash
      */
     protected function bcrypt64Decode($data)
     {
-        $translated = strtr($data, array_combine(str_split(self::CHARS_BCRYPT), str_split(self::CHARS_BASE64)));
-        return base64_decode($translated);
+        return base64_decode(strtr($data, self::CHARS_BCRYPT, self::CHARS_BASE64));
     }
 }
